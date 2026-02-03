@@ -58,6 +58,7 @@ function actionjuris_blog_importer_page()
                 <li>✅ Proper heading tags (H2) will be applied</li>
                 <li>✅ Two-column image layouts supported</li>
                 <li>✅ <strong>NEW:</strong> Country-based categories (gb, ca, us, etc.)</li>
+                <li>✅ <strong>NEW:</strong> Automatic batch processing for large imports</li>
             </ul>
         </div>
 
@@ -110,11 +111,25 @@ function actionjuris_blog_importer_page()
             padding: 10px;
             margin: 10px 0;
         }
+
+        .import-batch {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .batch-header {
+            background: #e9e9e9;
+            padding: 10px;
+            margin: -15px -15px 15px -15px;
+            font-weight: bold;
+        }
     </style>
     <?php
 }
 
-// Main import function
+// Main import function with batch processing
 function actionjuris_import_blogs()
 {
     echo '<div class="import-progress">';
@@ -151,19 +166,56 @@ function actionjuris_import_blogs()
     // First, collect all slugs for internal linking
     $all_slugs = actionjuris_collect_all_slugs($data);
 
+    // Combine all blogs into one array
+    $all_blogs = [];
+    if (!empty($data['data'])) {
+        $all_blogs = array_merge($all_blogs, $data['data']);
+    }
+    if (!empty($data['sub_data'])) {
+        $all_blogs = array_merge($all_blogs, $data['sub_data']);
+    }
+
+    $total_blogs = count($all_blogs);
+
+    if ($total_blogs === 0) {
+        echo '<div class="import-skipped">';
+        echo '<p>No blogs found to import.</p>';
+        echo '</div>';
+        return;
+    }
+
+    // Set safe batch size (15 blogs per batch is safe)
+    $batch_size = 15;
+    $total_batches = ceil($total_blogs / $batch_size);
+
+    echo '<div class="import-info">';
+    echo '<h3>📊 Import Statistics</h3>';
+    echo '<p><strong>Total Blogs Found:</strong> ' . $total_blogs . '</p>';
+    echo '<p><strong>Batch Size:</strong> ' . $batch_size . ' blogs per batch (safe limit)</p>';
+    echo '<p><strong>Total Batches:</strong> ' . $total_batches . '</p>';
+    echo '<p><strong>Estimated Time:</strong> ' . ceil($total_batches * 2) . ' - ' . ceil($total_batches * 3) . ' seconds</p>';
+    echo '</div>';
+
     $imported_count = 0;
     $skipped_count = 0;
     $error_count = 0;
 
-    // Import MAIN blogs (from 'data' array)
-    if (!empty($data['data'])) {
-        echo '<div class="import-info">';
-        echo '<h3>📁 Importing Main Blogs (' . count($data['data']) . ' found)</h3>';
+    // Process blogs in batches
+    for ($batch = 0; $batch < $total_batches; $batch++) {
+        $start = $batch * $batch_size;
+        $batch_blogs = array_slice($all_blogs, $start, $batch_size);
+        $batch_number = $batch + 1;
+
+        echo '<div class="import-batch">';
+        echo '<div class="batch-header">';
+        echo '🔄 Processing Batch ' . $batch_number . ' of ' . $total_batches . ' (Blogs ' . ($start + 1) . ' to ' . min($start + $batch_size, $total_blogs) . ')';
         echo '</div>';
 
-        foreach ($data['data'] as $index => $blog) {
+        foreach ($batch_blogs as $index => $blog) {
+            $blog_number = $start + $index + 1;
+
             echo '<div class="import-progress">';
-            echo '<p>Processing main blog ' . ($index + 1) . ' of ' . count($data['data']) . '...</p>';
+            echo '<p>Processing blog ' . $blog_number . ' of ' . $total_blogs . ' (Batch ' . $batch_number . ')</p>';
             echo '</div>';
 
             $result = actionjuris_import_single_blog($blog, $all_slugs);
@@ -174,37 +226,26 @@ function actionjuris_import_blogs()
             } else {
                 $error_count++;
             }
+
+            // Flush output after each blog for real-time progress
+            flush();
+            ob_flush();
         }
-    } else {
-        echo '<div class="import-skipped">';
-        echo '<p>No main blogs found.</p>';
-        echo '</div>';
-    }
 
-    // Import SUB blogs (from 'sub_data' array)
-    if (!empty($data['sub_data'])) {
-        echo '<div class="import-info">';
-        echo '<h3>📁 Importing Sub Blogs (' . count($data['sub_data']) . ' found)</h3>';
-        echo '</div>';
+        echo '</div>'; // Close batch div
 
-        foreach ($data['sub_data'] as $index => $blog) {
-            echo '<div class="import-progress">';
-            echo '<p>Processing sub blog ' . ($index + 1) . ' of ' . count($data['sub_data']) . '...</p>';
+        // Add 2-second delay between batches (except last batch)
+        if ($batch < $total_batches - 1) {
+            echo '<div class="import-info">';
+            echo '<p>⏳ Pausing for 2 seconds before next batch...</p>';
             echo '</div>';
 
-            $result = actionjuris_import_single_blog($blog, $all_slugs);
-            if ($result === 'imported') {
-                $imported_count++;
-            } elseif ($result === 'skipped') {
-                $skipped_count++;
-            } else {
-                $error_count++;
-            }
+            // Flush output
+            flush();
+            ob_flush();
+
+            sleep(2); // 2 second delay between batches
         }
-    } else {
-        echo '<div class="import-skipped">';
-        echo '<p>No sub blogs found.</p>';
-        echo '</div>';
     }
 
     // Final summary
@@ -216,6 +257,7 @@ function actionjuris_import_blogs()
     echo '<li>⚠️ Skipped: ' . $skipped_count . ' existing posts</li>';
     echo '<li>❌ Errors: ' . $error_count . ' posts</li>';
     echo '<li>📊 Total processed: ' . ($imported_count + $skipped_count + $error_count) . ' posts</li>';
+    echo '<li>📦 Processed in ' . $total_batches . ' batches of ' . $batch_size . '</li>';
     echo '</ul>';
     echo '</div>';
 }
@@ -292,7 +334,7 @@ function actionjuris_download_featured_image($image_url, $post_id, $title)
     return $attachment_id;
 }
 
-// Create or get country category
+// Create or get country category - FIXED VERSION
 function actionjuris_get_country_category($country_code)
 {
     if (empty($country_code)) {
@@ -486,8 +528,7 @@ function actionjuris_get_country_category($country_code)
         'ug' => 'Uganda',
         'ua' => 'Ukraine',
         'ae' => 'United Arab Emirates',
-        'gb' => 'United Kingdom',
-        'uk' => 'United Kingdom',
+        'gb' => 'Great Britain',
         'us' => 'United States',
         'uy' => 'Uruguay',
         'uz' => 'Uzbekistan',
@@ -500,30 +541,37 @@ function actionjuris_get_country_category($country_code)
         'zw' => 'Zimbabwe',
     ];
 
-    $category_name = isset($country_names[strtolower($country_code)])
-        ? $country_names[strtolower($country_code)]
-        : strtoupper($country_code); // Fallback to uppercase code
+    // Normalize country code
+    $country_code_lower = strtolower($country_code);
 
-    // $category_slug = sanitize_title('country-' . $country_code);
-    $category_slug = strtolower($country_code);
+    // For UK/GB, use 'uk' as the unified slug
+    if (in_array($country_code_lower, ['gb', 'uk'])) {
+        $category_slug = 'uk';  // Unified slug for both
+        $category_name = 'United Kingdom';
+    } else {
+        $category_slug = $country_code_lower;
+        $category_name = isset($country_names[$country_code_lower])
+            ? $country_names[$country_code_lower]
+            : strtoupper($country_code);
+    }
 
     // Check if category exists
     $existing_category = get_term_by('slug', $category_slug, 'category');
 
     if ($existing_category) {
         echo '<div class="import-info">';
-        echo '<p>🏷️ Using existing category: ' . esc_html($category_name) . '</p>';
+        echo '<p>🏷️ Using existing category: ' . esc_html($category_name) . ' (' . esc_html($category_slug) . ')</p>';
         echo '</div>';
         return $existing_category->term_id;
     }
 
     // Create new category
     $new_category = wp_insert_term(
-        $category_name, // Category name
-        'category',     // Taxonomy
+        $category_name,
+        'category',
         [
             'slug' => $category_slug,
-            'description' => 'Blogs For ' . $category_name
+            'description' => 'Blogs from ' . $category_name
         ]
     );
 
@@ -535,7 +583,7 @@ function actionjuris_get_country_category($country_code)
     }
 
     echo '<div class="import-success">';
-    echo '<p>✅ Created new category: ' . esc_html($category_name) . '</p>';
+    echo '<p>✅ Created new category: ' . esc_html($category_name) . ' (' . esc_html($category_slug) . ')</p>';
     echo '</div>';
 
     return $new_category['term_id'];
@@ -544,6 +592,10 @@ function actionjuris_get_country_category($country_code)
 // Function to import a single blog (main or sub)
 function actionjuris_import_single_blog($blog, $all_slugs)
 {
+    // Increase time limit for each blog
+    @set_time_limit(60); // 60 seconds per blog
+    @ini_set('memory_limit', '256M');
+
     $slug = $blog['slug'];
     $title = $blog['page_title'];
     $created_at = $blog['created_at'];
